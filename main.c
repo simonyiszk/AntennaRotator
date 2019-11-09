@@ -112,7 +112,7 @@ void set_axis_deg(Axis a, double deg){
 enum _PROTO{
 	EASYCOMM2, YAESU,
 	DEBUG=-1
-} proto=-1;
+} proto=EASYCOMM2;
 
 void comm_Debug(const char* ln){
 	_CMD("adc"){
@@ -145,51 +145,77 @@ void comm_Debug(const char* ln){
 }
 
 void comm_Easy(const char* ln){
+	const char* remain;
 	//Rotator commands
 	_CMD("MR"){
 		start_rotate(RIGHT);
+		remain=&ln[2];
 	}else
 	_CMD("ML"){
 		start_rotate(LEFT);
+		remain=&ln[2];
 	}else
 	_CMD("MD"){
 		start_rotate(DOWN);
+		remain=&ln[2];
 	}else
 	_CMD("MU"){
 		start_rotate(UP);
+		remain=&ln[2];
 	}else
 	_CMD("SA"){
 		stop_rotate(AZ);
+		remain=&ln[2];
 	}else
 	_CMD("SE"){
 		stop_rotate(EL);
+		remain=&ln[2];
+	}else
+	//HACK: positional query
+	_CMD("AZ EL"){
+		char tmp[50], sAZ[5]={'0'}, sEL[6]={'0'};
+		snprintf(tmp, sizeof(tmp), "AZ%s EL%s\r\n", dtostrf(get_axis_deg(AZ), 3, 1, sAZ), dtostrf(get_axis_deg(EL), 3, 1, sEL));
+		uart_print(tmp);
+		remain=&ln[5];
 	}else
 	//axis homing
 	_CMD("AZ"){
-		set_axis_deg(AZ, atof(&ln[2]));
+		set_axis_deg(AZ, strtod(&ln[2], (char**)&remain));
 	}else
 	_CMD("EL"){
-		set_axis_deg(EL, atof(&ln[2]));
+		set_axis_deg(EL, strtod(&ln[2], (char**)&remain));
 	}else
 	//raw I/O
-	_CMD("OP"){
-		//TODO
-	}else
+//	_CMD("OP"){
+//		//TODO
+//		remain=&ln[2];
+//	}else
 	_CMD("IP"){
 		uart_print(ln);
 		char ld_id=ln[2]-'0';
 		uart_print(PORTC & (1<<2<<ld_id)?",0":",1");
+		remain=&ln[3];
 	}else
 	_CMD("AN"){
 		uart_print(ln);
 		char tmp[50];
 		snprintf(tmp, sizeof(tmp), ",%d\r\n", adc_read(ln[3]-'0'));
 		uart_print(tmp);
+		remain=&ln[3];
 	}else
 	//version
 	_CMD("VE"){
 		uart_print("VE2");
+		ln+=2;
 	}
+	else{
+		uart_print("ALerror\r\n");
+		return;
+	}
+	
+	//more cmd's in buffer
+	if(remain[0]!=0)
+		comm_Easy(&remain[1]);
 }
 
 void comm_Yaesu(const char* ln){
@@ -221,19 +247,19 @@ void comm_Yaesu(const char* ln){
 	//Status commands
 	_CMD("C"){
 		char tmp[8];
-		snprintf(tmp, 8, "AZ=%03f", get_axis_deg(AZ));
+		snprintf(tmp, 8, "AZ=%03d", (int)get_axis_deg(AZ));
 		uart_print(tmp);
 		lf=1;
 	}else
 	_CMD("B"){
 		char tmp[8];
-		snprintf(tmp, 8, "EL=%03f", get_axis_deg(EL));
+		snprintf(tmp, 8, "EL=%03d", (int)get_axis_deg(EL));
 		uart_print(tmp);
 		lf=1;
 	}else
 	_CMD("C2"){
 		char tmp[20];
-		snprintf(tmp, 8, "AZ=%03f EL=%03f", get_axis_deg(AZ), get_axis_deg(EL));
+		snprintf(tmp, 8, "AZ=%03d EL=%03d", (int)get_axis_deg(AZ), (int)get_axis_deg(EL));
 		uart_print(tmp);
 		lf=1;
 	}else
@@ -251,19 +277,35 @@ void comm_Yaesu(const char* ln){
 	if(lf) uart_print("\n");
 }
 
+inline static void proto_print(){
+	switch(proto){
+	case DEBUG:
+		uart_print("Protocol *: Debug\r\n");
+		break;
+	case EASYCOMM2:
+		uart_print("Protocol E: Easycomm2\r\n");
+		break;
+	case YAESU:
+		uart_print("Protocol Y: YAESU GS232B\r\n");
+		break;
+	}
+}
+
 void proto_switch(const char* ln){
 	switch(ln[1]){
 	case 'E':
 		proto=EASYCOMM2;
-		uart_print("Protocol E: Easycomm2\r\n");
+		proto_print();
 		break;
 	case 'Y':
 		proto=YAESU;
-		uart_print("Protocol Y: YAESU GS232B\r\n");
+		/*fall-through*/
+	case '?':
+		proto_print();
 		break;
 	default:
 		proto=DEBUG;
-		uart_print("Protocol *: Debug\r\n");
+		proto_print();
 	}
 }
 
