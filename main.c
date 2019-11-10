@@ -33,7 +33,7 @@ uint16_t adc_read(uint8_t ch){
 	ADMUX = (ADMUX & 0xF8) | ch;
 	ADCSRA |= (1<<ADSC);
 	while(ADCSRA & (1<<ADSC));
-	return (ADC);
+	return (ADC)&~(3);
 }
 
 void uart_readln(char* buf, size_t maxlen){
@@ -87,22 +87,31 @@ static inline Direction get_dir(Axis a, int16_t sgn){
 	}
 }
 
-//Calibrate ADC to 1000 at max_deg degrees
+//#define MAX_ADC 1000
+#define MAX_ADC 510
+
+//Calibrate ADC to MAX_ADC at max_deg degrees
 static inline uint16_t max_deg(Axis a){
 	return a==AZ?450:180;
 }
 
 double get_axis_deg(Axis a){
-	return adc_read(a)*max_deg(a)/1000.0;
+	return adc_read(a)/(double)MAX_ADC*max_deg(a);
 }
 
 void set_axis_deg(Axis a, double deg){
-	int16_t target=deg*1000/max_deg(a);
-	int16_t sgn=target-adc_read(a);
-	start_rotate(get_dir(a, sgn));
-	//waiting for the sign to change
-	while((target-adc_read(a))*sgn>0);
-	stop_rotate(a);
+	int16_t target=deg/max_deg(a)*MAX_ADC;
+	if(target>adc_read(a)){
+		start_rotate(get_dir(a, 1));
+		//waiting for the sign to change
+		while(target>adc_read(a));
+		stop_rotate(a);
+	}else{
+		start_rotate(get_dir(a, -1));
+		//waiting for the sign to change
+		while(target<adc_read(a));
+		stop_rotate(a);
+	}
 }
 
 /****************************/
