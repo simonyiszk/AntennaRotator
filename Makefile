@@ -1,27 +1,19 @@
-target = flash
-srcs   = main.c
-defs   = -DF_CPU=8000000L
+rotator.elf: $(wildcard *.cpp)
+	avr-gcc -Wall -Wextra -g -O3 -isystem avr-libstdcpp/include -mmcu=atmega8 -std=c++20 -o $@ $^
 
-objs   = $(srcs:.c=.o)
+.PHONY: program size clean reset
 
-all: $(target).hex
+all: rotator.elf
 
-.PHONY: clean program fuse
-
-fuse:
-	avrdude -c usbtiny -p atmega8 -U lfuse:w:0x1c:m -U hfuse:w:0xd9:m
-	
-program: $(target).hex
-	avrdude -c usbtiny -p atmega8 -U flash:w:$(target).hex
-
-$(target).hex: $(target).elf
-	avr-objcopy -j .text -j .data -O ihex $^ $@
-	
-$(target).elf: $(objs)
-	avr-gcc -g -mmcu=atmega8 -o $@ $^
-	
-%.o: %.c
-	avr-gcc -g -Os -mmcu=atmega8 -c $? -o $@ $(defs) --std=gnu99
-	
 clean:
-	rm *.o *.hex *.elf
+	rm -rf *o *elf
+
+size: rotator.elf
+	avr-size --mcu=atmega8 -C $<
+
+program: rotator.elf
+	avrdude -p m8 -c stk500v2 -U flash:w:$<:e -P /dev/ttyUSB0 -B100000  -U lfuse:w:0x1c:m -U hfuse:w:0xd9:m
+
+reset:
+	avrdude -p m8 -c stk500v2 -P /dev/ttyUSB0 -B100000 
+
