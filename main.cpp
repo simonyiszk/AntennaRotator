@@ -13,51 +13,109 @@
 #include <cctype>
 #include <string_view>
 #include <avr/wdt.h>
+#include <eeprom_var.hpp>
+
+#define F_CPU static_cast<unsigned long>(8e6)
+#include <util/delay.h>
+#include "filter.hpp"
+
+#ifndef macro____commit
+#warning "No version specified"
+#define macro____commit_f "Unknown version"
+#endif
+
+namespace permanent_config
+{
+	namespace other_memory_space{
+		uint16_t azimuth_null [[gnu::section(".eeprom")]] = 0;
+		uint16_t elevation_null [[gnu::section(".eeprom")]] = 0;
+		uint16_t azimuth_max [[gnu::section(".eeprom")]] = 544;
+		uint16_t elevation_max [[gnu::section(".eeprom")]] = 580;
+		uint8_t azimuth_error [[gnu::section(".eeprom")]] = 13;
+		uint8_t elevation_error [[gnu::section(".eeprom")]] = 0;
+	}
+	
+	namespace azimuth{
+		avr::eeprom_ref adc_at_max {&other_memory_space::azimuth_max}; //ADC value at maximum value
+		avr::eeprom_ref error {&other_memory_space::azimuth_error}; //error in degrees from the ideal 0 deg
+		avr::eeprom_ref null {&other_memory_space::azimuth_null}; //ADC offset at mechanical 0 deg
+	}	
+	
+	namespace elevation{
+		avr::eeprom_ref adc_at_max {&other_memory_space::elevation_max};
+		avr::eeprom_ref error {&other_memory_space::elevation_error};	
+		avr::eeprom_ref null {&other_memory_space::elevation_null};
+	}
+}
 
 namespace{
+	inline void uartputc(const char c){
+		while(!(UCSRA & (1<<UDRE)));
+		UDR=c;
+	}
+	
 	inline void uartputs(const std::string_view& str){
-		for(char c: str){
-			while(!(UCSRA & (1<<UDRE)));
-			UDR=c;
-		}
+		for(char c: str)
+			uartputc(c);
 	}
 
 	inline void uartputint3(uint16_t i){
 		i%=1000;
-		while(!(UCSRA & (1<<UDRE)));
-		UDR=i/100+'0';
+		uartputc(i/100+'0');
 		i%=100;
-		while(!(UCSRA & (1<<UDRE)));
-		UDR=i/10+'0';
+		uartputc(i/10+'0');
 		i%=10;
-		while(!(UCSRA & (1<<UDRE)));
-		UDR=i+'0';
+		uartputc(i+'0');
+	}
+	
+	inline void uartputint6(uint16_t i){
+		i%=1000000;
+		uartputc(i/100000+'0');
+		i%=100000;
+		uartputc(i/10000+'0');
+		i%=10000;
+		uartputc(i/1000+'0');
+		i%=1000;
+		uartputc(i/100+'0');
+		i%=100;
+		uartputc(i/10+'0');
+		i%=10;
+		uartputc(i+'0');
 	}
 	
 	enum button: uint8_t{
 		right=1<<2, left=1<<3, down=1<<4, up=1<<5
 	};
+		
+	enum class ADChannel : uint8_t{
+		asimuth=0,
+		elevation=1,
+	};
 	
-	constexpr const uint16_t max = 510; //TODO calibrate??
+	inline uint16_t getadch(ADChannel ch){
+		ADMUX = static_cast<uint8_t>(ch);
+		ADCSRA = (1<<ADEN)|(1<<ADPS2)|(1<<ADPS1)|(1<<ADSC);
+		while(ADCSRA & (1<<ADSC));
+		return ADC;
+	}
+	
+	namespace mechanical_limits{
+		constexpr uint16_t asimuth_max_degree = 450;
+		constexpr uint16_t elevation_max_degree = 180;
+	}
 	
 	inline uint16_t getas(){
-		ADMUX = (ADMUX & 0xF8) | 0;
-		ADCSRA |= (1<<ADSC);
-		while(ADCSRA & (1<<ADSC));
-		uint32_t ad = ADC;
-		
-		return ad*450/max;
+		static filter::moving_average<4, uint16_t, 0x03ff> fir;
+		int16_t meas = getadch(ADChannel::asimuth) - permanent_config::azimuth::null;
+		fir << (meas > 0 ? meas : 0);
+		return (static_cast<uint32_t>(fir.get())*mechanical_limits::asimuth_max_degree/permanent_config::azimuth::adc_at_max) + permanent_config::azimuth::error;
 	}
 
-	constexpr const int8_t azimuth_calibration = 13;
-
 	inline uint16_t getel(){
-		ADMUX = (ADMUX & 0xF8) | 1 ;
-		ADCSRA |= (1<<ADSC);
-		while(ADCSRA & (1<<ADSC));
-		uint32_t ad = ADC;
-		
-		return ad*180/max;
+		static filter::moving_average<4, uint16_t, 0x03ff> fir;
+		int16_t meas = getadch(ADChannel::elevation) - permanent_config::elevation::null;
+		fir << (meas > 0 ? meas : 0);
+		return (static_cast<uint32_t>(fir.get())*mechanical_limits::elevation_max_degree/permanent_config::elevation::adc_at_max) + permanent_config::elevation::error;
 	}
 	
 	inline void press(button b){
@@ -89,6 +147,8 @@ volatile struct {
 		uint16_t goal;
 		bool issued;
 	} elevate;
+	bool send_debug;
+	bool send_help;
 	bool send_ack;
 	bool send_unkown;
 } state;
@@ -124,6 +184,7 @@ ISR(USART_RXC_vect){
 			case 'E':
 				state.elevation.turn=false;
 				state.elevate.issued=false;
+				break;
 			case 'r':
 			case 'R':
 				state.rotation.turn=true;
@@ -186,65 +247,110 @@ ISR(USART_RXC_vect){
 					state.elevation.turn=false;
 				}
 				break;
+			case 'o': //WARNING Not GS232A compilent
+			case 'O': //Stores the null-degree AD value in the eeprom used to correct the readings
+				state.send_debug=true;
+				eeprom_busy_wait(); //The non-interrupt part could use the EEPROM
+				if(buffer[1] == '2'){
+					permanent_config::elevation::null.set(getadch(ADChannel::elevation));
+				} else {
+					permanent_config::azimuth::null.set(getadch(ADChannel::asimuth));
+				}
+				while(1); //Reset, so no volatile access is needed
+				break;
+			case 'f': //WARNING Not GS232A compilent
+			case 'F': //Stores the full-scale AD value in the eeprom used to correct the readings
+				state.send_debug=true;
+				eeprom_busy_wait(); //The non-interrupt part could use the EEPROM
+				if(buffer[1] == '2'){
+					permanent_config::elevation::adc_at_max.set(getadch(ADChannel::elevation));
+				} else {
+					permanent_config::azimuth::adc_at_max.set(getadch(ADChannel::asimuth));
+				}
+				while(1); //Reset, so no volatile access is needed
+				break;
+			case 'q': //WARNING Not GS232A compilent
+			case 'Q': //Stores the pointing error of the installation in the azimuth axis
+				state.send_debug=true;
+				if(std::isdigit(buffer[1]) && std::isdigit(buffer[2]) && std::isdigit(buffer[3])){
+					for(int i=1;i<=7;i++)
+						buffer[i]-='0';
+					eeprom_busy_wait(); //The non-interrupt part could use the EEPROM
+					permanent_config::azimuth::error.set((static_cast<uint16_t>(buffer[1])*100) + (buffer[2]*10) + buffer[3]);
+					while(1);
+				} else {
+					state.send_unkown=true;
+				}
+				break;
+			case 'g': //WARNING Not GS232A compilent
+			case 'G': //Stores the pointing error of the installation in the elevation axis
+				state.send_debug=true;
+				if(std::isdigit(buffer[1]) && std::isdigit(buffer[2]) && std::isdigit(buffer[3])){
+					for(int i=1;i<=7;i++)
+						buffer[i]-='0';
+					eeprom_busy_wait(); //The non-interrupt part could use the EEPROM
+					permanent_config::elevation::error.set((static_cast<uint16_t>(buffer[1])*100) + (buffer[2]*10) + buffer[3]);
+					while(1);
+				} else {
+					state.send_unkown=true;
+				}
+				break;
+			case 'i': //WARNING Not GS232A compilent
+			case 'I': //Debug print
+				state.position_value=true;
+				state.send_debug=true;
+				break;
+			case 'h': //WARNING Not GS232A compilent
+			case 'H':
+				state.send_help=true;
+				break;
 			default:
 				state.send_ack=false;
 				state.send_unkown=true;
 				break;
-
 		}
 		index=0;
 	}
 }
 
 void realmain [[noreturn]] (){
-	UBRRH = 0;	
+	UBRRH = 0;
 	UBRRL = 51;
 	UCSRB = (1<<RXEN)|(1<<TXEN)|(1<<RXCIE);
 	UCSRC = (1<<URSEL)|(3<<UCSZ0);
 	
-	DDRC |= (1<<2)|(1<<3)|(1<<4)|(1<<5);
+	DDRC = (1<<2)|(1<<3)|(1<<4)|(1<<5);
 	
 	ADCSRA = (1<<ADEN)|(1<<ADPS2)|(1<<ADPS1);
 
 	sei();
 
-	WDTCR = (1<<WDCE) | (1<<WDP2) | (1<<WDP1);
+	wdt_enable(WDTO_2S);
 
 	while(1){
 		wdt_reset();
 
-		uint16_t mechanical_azimuth = getas();
-		uint16_t geographical_azimuth = mechanical_azimuth + azimuth_calibration;
-		uint16_t elevation = getel();
+		uint16_t azimuth_pos = getas();
+		uint16_t elevation_pos = getel();
 
 		//Should it move right?
 		if 
 		( 
 			(state.rotation.turn && state.rotation.clockwise) ||
-			(state.rotate.issued && (geographical_azimuth < state.rotate.goal))
+			(state.rotate.issued && (azimuth_pos < state.rotate.goal))
 		)
 			{
-				press(button::right);
 				release(button::left);
-
-				if(mechanical_azimuth>440){ // 'Safty first' -- Anatoly Dyatlov
-					state.rotation.turn=false;
-					state.rotate.issued=false;
-				}
+				press(button::right);
 			}
 		else if //Should it move left?
 		( 
 			(state.rotation.turn && !state.rotation.clockwise) ||
-			(state.rotate.issued && (geographical_azimuth > state.rotate.goal))
+			(state.rotate.issued && (azimuth_pos > state.rotate.goal))
 		)
 			{
-				press(button::left);
 				release(button::right);
-
-				if(mechanical_azimuth<10){ // 'Safty first' -- Anatoly Dyatlov
-					state.rotation.turn=false;
-					state.rotate.issued=false;
-				}
+				press(button::left);
 			}
 		else 
 			{
@@ -258,31 +364,20 @@ void realmain [[noreturn]] (){
 		if 
 		( 
 			(state.elevation.turn && state.elevation.up) ||
-			(state.elevate.issued && (elevation < state.elevate.goal))
+			(state.elevate.issued && (elevation_pos < state.elevate.goal))
 		)
 			{
 				release(button::down);
 				press(button::up);
-
-				if(elevation>170){ // 'Safty first' -- Anatoly Dyatlov
-					state.elevate.issued=false;
-					state.elevation.turn=false;
-				}
 			}
 		else if //Should it move down?
 		( 
 			(state.elevation.turn && !state.elevation.up) ||
-			(state.elevate.issued && (elevation > state.elevate.goal))
+			(state.elevate.issued && (elevation_pos > state.elevate.goal))
 		)
 			{
-				//check
-				press(button::down);
 				release(button::up);
-
-				if(elevation<10){ // 'Safty first' -- Anatoly Dyatlov
-					state.elevate.issued=false;
-					state.elevation.turn=false;
-				}
+				press(button::down);
 			}
 		else 
 			{
@@ -291,26 +386,53 @@ void realmain [[noreturn]] (){
 				state.elevate.issued = false;
 			}
 			
+		_delay_ms(50); //Wait, do not flap the relay; 'Safty first' -- Anatoly Dyatlov
+		//Also helps to write the calibration values lower chances during a read
+		
 		if (state.send_unkown) {uartputs("? >"); state.send_unkown=false;}
 		if (state.position_value){
 			state.position_value = false;
 			uartputs("+0");
-			uartputint3(geographical_azimuth);
+			uartputint3(azimuth_pos);
 			uartputs("+0");
-			uartputint3(elevation);
+			uartputint3(elevation_pos);
 			uartputs("\n");
 		}
 		if (state.azimuth_value){
 			state.azimuth_value = false;
 			uartputs("+0");
-			uartputint3(geographical_azimuth);
+			uartputint3(azimuth_pos);
 			uartputs("\n");
 		}
 		if (state.elevation_value){
 			state.elevation_value = false;
 			uartputs("+0");
-			uartputint3(elevation);
+			uartputint3(elevation_pos);
 			uartputs("\n");
+		}
+		if (state.send_debug){
+			state.send_debug=false;
+			uartputs("\rAzimuth: ");
+			uartputint3(permanent_config::azimuth::error);
+			uartputs(" ");
+			uartputint6(getadch(ADChannel::asimuth));
+			uartputs(" ");
+			uartputint3(permanent_config::azimuth::null);
+			uartputs(" ");
+			uartputint6(permanent_config::azimuth::adc_at_max);
+			uartputs("\n\rElevation: ");
+			uartputint3(permanent_config::elevation::error);
+			uartputs(" ");
+			uartputint6(getadch(ADChannel::elevation));
+			uartputs(" ");
+			uartputint3(permanent_config::elevation::null);
+			uartputs(" ");
+			uartputint6(permanent_config::elevation::adc_at_max);
+			uartputs("\n");
+		}
+		if (state.send_help){
+			state.send_help=false;
+			uartputs("AntennaRotator controller HA5KFU HA7CSK HA8KDA -- https://github.com/simonyiszk/AntennaRotator\n\r" macro____commit "\n\n\n");
 		}
 		if (state.send_ack) {uartputs("\r"); state.send_ack=false;}
 	}
