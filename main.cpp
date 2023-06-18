@@ -431,7 +431,7 @@ void realmain [[noreturn]] (){
 			uartputint6(getadch(ADChannel::bandgap));
 			uartputc(' ');
 			uartputint6(getadch(ADChannel::zero));
-			uartputs("\rAzimuth: ");
+			uartputs("\n\rAzimuth: ");
 			uartputint3(permanent_config::azimuth::error);
 			uartputc(' ');
 			uartputint6(getadch(ADChannel::asimuth));
