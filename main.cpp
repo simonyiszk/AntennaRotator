@@ -105,14 +105,14 @@ namespace{
 	}
 	
 	inline uint16_t getas(){
-		static filter::moving_average<4, uint16_t, 0x03ff> fir;
+		static filter::moving_average<16, uint16_t, 0x03ff> fir;
 		int16_t meas = getadch(ADChannel::asimuth) - permanent_config::azimuth::null;
 		fir << (meas > 0 ? meas : 0);
 		return (static_cast<uint32_t>(fir.get())*mechanical_limits::asimuth_max_degree/permanent_config::azimuth::adc_at_max) + permanent_config::azimuth::error;
 	}
 
 	inline uint16_t getel(){
-		static filter::moving_average<4, uint16_t, 0x03ff> fir;
+		static filter::moving_average<16, uint16_t, 0x03ff> fir;
 		int16_t meas = getadch(ADChannel::elevation) - permanent_config::elevation::null;
 		fir << (meas > 0 ? meas : 0);
 		return (static_cast<uint32_t>(fir.get())*mechanical_limits::elevation_max_degree/permanent_config::elevation::adc_at_max) + permanent_config::elevation::error;
@@ -142,10 +142,14 @@ volatile struct {
 	struct {
 		uint16_t goal;
 		bool issued;
+		bool up;
+		bool down;
 	} rotate;
 	struct {
 		uint16_t goal;
 		bool issued;
+		bool up;
+		bool down;
 	} elevate;
 	bool send_debug;
 	bool send_help;
@@ -337,18 +341,22 @@ void realmain [[noreturn]] (){
 		if 
 		( 
 			(state.rotation.turn && state.rotation.clockwise) ||
-			(state.rotate.issued && (azimuth_pos < state.rotate.goal))
+			( (state.rotate.issued || state.rotate.up) && (azimuth_pos < state.rotate.goal))
 		)
 			{
+				state.rotate.issued=false;
+				state.rotate.up=true;
 				release(button::left);
 				press(button::right);
 			}
 		else if //Should it move left?
 		( 
 			(state.rotation.turn && !state.rotation.clockwise) ||
-			(state.rotate.issued && (azimuth_pos > state.rotate.goal))
+			(( state.rotate.issued || state.rotate.down) && (azimuth_pos > state.rotate.goal))
 		)
 			{
+				state.rotate.issued=false;
+				state.rotate.down=true;
 				release(button::right);
 				press(button::left);
 			}
@@ -357,6 +365,8 @@ void realmain [[noreturn]] (){
 				release(button::left);
 				release(button::right);
 				state.rotate.issued=false;
+				state.rotate.up=false;
+				state.rotate.down=false;
 				//release left and right
 			}
 			
@@ -364,18 +374,22 @@ void realmain [[noreturn]] (){
 		if 
 		( 
 			(state.elevation.turn && state.elevation.up) ||
-			(state.elevate.issued && (elevation_pos < state.elevate.goal))
+			((state.elevate.issued || state.elevate.up) && (elevation_pos < state.elevate.goal))
 		)
 			{
+				state.elevate.issued=false;
+				state.elevate.up=true;
 				release(button::down);
 				press(button::up);
 			}
 		else if //Should it move down?
 		( 
 			(state.elevation.turn && !state.elevation.up) ||
-			(state.elevate.issued && (elevation_pos > state.elevate.goal))
+			( (state.elevate.issued || state.elevate.down) && (elevation_pos > state.elevate.goal))
 		)
 			{
+				state.elevate.issued=false;
+				state.elevate.down=true;
 				release(button::up);
 				press(button::down);
 			}
@@ -384,10 +398,9 @@ void realmain [[noreturn]] (){
 				release(button::up);
 				release(button::down);
 				state.elevate.issued = false;
+				state.elevate.up=false;
+				state.elevate.down=false;
 			}
-			
-		_delay_ms(50); //Wait, do not flap the relay; 'Safty first' -- Anatoly Dyatlov
-		//Also helps to write the calibration values lower chances during a read
 		
 		if (state.send_unkown) {uartputs("? >"); state.send_unkown=false;}
 		if (state.position_value){
