@@ -90,6 +90,8 @@ namespace{
 	enum class ADChannel : uint8_t{
 		asimuth=0,
 		elevation=1,
+		bandgap=0x0e,
+		zero=0x0f
 	};
 	
 	inline uint16_t getadch(ADChannel ch){
@@ -409,45 +411,49 @@ void realmain [[noreturn]] (){
 			uartputint3(azimuth_pos);
 			uartputs("+0");
 			uartputint3(elevation_pos);
-			uartputs("\n");
+			uartputc('\n');
 		}
 		if (state.azimuth_value){
 			state.azimuth_value = false;
 			uartputs("+0");
 			uartputint3(azimuth_pos);
-			uartputs("\n");
+			uartputc('\n');
 		}
 		if (state.elevation_value){
 			state.elevation_value = false;
 			uartputs("+0");
 			uartputint3(elevation_pos);
-			uartputs("\n");
+			uartputc('\n');
 		}
 		if (state.send_debug){
 			state.send_debug=false;
+			uartputs("\rADC: ");
+			uartputint6(getadch(ADChannel::bandgap));
+			uartputc(' ');
+			uartputint6(getadch(ADChannel::zero));
 			uartputs("\rAzimuth: ");
 			uartputint3(permanent_config::azimuth::error);
-			uartputs(" ");
+			uartputc(' ');
 			uartputint6(getadch(ADChannel::asimuth));
-			uartputs(" ");
+			uartputc(' ');
 			uartputint3(permanent_config::azimuth::null);
-			uartputs(" ");
+			uartputc(' ');
 			uartputint6(permanent_config::azimuth::adc_at_max);
 			uartputs("\n\rElevation: ");
 			uartputint3(permanent_config::elevation::error);
-			uartputs(" ");
+			uartputc(' ');
 			uartputint6(getadch(ADChannel::elevation));
-			uartputs(" ");
+			uartputc(' ');
 			uartputint3(permanent_config::elevation::null);
-			uartputs(" ");
+			uartputc(' ');
 			uartputint6(permanent_config::elevation::adc_at_max);
-			uartputs("\n");
+			uartputc('\n');
 		}
 		if (state.send_help){
 			state.send_help=false;
 			uartputs("AntennaRotator controller HA5KFU HA7CSK HA8KDA -- https://github.com/simonyiszk/AntennaRotator\n\r" macro____commit "\n\n\n");
 		}
-		if (state.send_ack) {uartputs("\r"); state.send_ack=false;}
+		if (state.send_ack) {uartputc('\r'); state.send_ack=false;}
 	}
 }
 
