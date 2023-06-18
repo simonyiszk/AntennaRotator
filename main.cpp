@@ -129,6 +129,10 @@ namespace{
 	}
 }
 
+enum goalstate{
+	stand=0, init, minus, plus,
+};
+
 volatile struct {
 	struct {
 		bool turn;
@@ -143,15 +147,11 @@ volatile struct {
 	bool position_value;
 	struct {
 		uint16_t goal;
-		bool issued;
-		bool up;
-		bool down;
+		goalstate state;
 	} rotate;
 	struct {
 		uint16_t goal;
-		bool issued;
-		bool up;
-		bool down;
+		goalstate state;
 	} elevate;
 	bool send_debug;
 	bool send_help;
@@ -178,42 +178,42 @@ ISR(USART_RXC_vect){
 			case 'U':
 				state.elevation.turn=true;
 				state.elevation.up=true;
-				state.elevate.issued=false;
+				state.elevate.state=stand;
 				break;
 			case 'd':
 			case 'D':
 				state.elevation.turn=true;
 				state.elevation.up=false;
-				state.elevate.issued=false;
+				state.elevate.state=stand;
 				break;
 			case 'e':
 			case 'E':
 				state.elevation.turn=false;
-				state.elevate.issued=false;
+				state.elevate.state=stand;
 				break;
 			case 'r':
 			case 'R':
 				state.rotation.turn=true;
 				state.rotation.clockwise=true;
-				state.rotate.issued=false;
+				state.rotate.state=stand;
 				break;
 			case 'l':
 			case 'L':
 				state.rotation.turn=true;
 				state.rotation.clockwise=false;
-				state.rotate.issued=false;
+				state.rotate.state=stand;
 				break;
 			case 'a':
 			case 'A':
 				state.rotation.turn=false;
-				state.rotate.issued=false;
+				state.rotate.state=stand;
 				break;
 			case 's':
 			case 'S':
 				state.elevation.turn=false;
 				state.rotation.turn=false;
-				state.rotate.issued=false;
-				state.elevate.issued=false;
+				state.rotate.state=stand;
+				state.elevate.state=stand;
 				break;
 			case 'c':
 			case 'C':
@@ -232,7 +232,7 @@ ISR(USART_RXC_vect){
 					for(int i=1;i<=3;i++)
 						buffer[i]-='0';
 					state.rotate.goal=(static_cast<uint16_t>(buffer[1])*100) + (buffer[2]*10) + buffer[3];
-					state.rotate.issued=true;
+					state.rotate.state=init;
 					state.rotation.turn=false;
 				}
 				break;
@@ -246,10 +246,10 @@ ISR(USART_RXC_vect){
 					for(int i=1;i<=7;i++)
 						buffer[i]-='0';
 					state.rotate.goal=(static_cast<uint16_t>(buffer[1])*100) + (buffer[2]*10) + buffer[3];
-					state.rotate.issued=true;
+					state.rotate.state=init;
 					state.rotation.turn=false;
 					state.elevate.goal=(static_cast<uint16_t>(buffer[5])*100) + (buffer[6]*10) + buffer[7];
-					state.elevate.issued=true;
+					state.elevate.state=init;
 					state.elevation.turn=false;
 				}
 				break;
@@ -343,22 +343,20 @@ void realmain [[noreturn]] (){
 		if 
 		( 
 			(state.rotation.turn && state.rotation.clockwise) ||
-			( (state.rotate.issued || state.rotate.up) && (azimuth_pos < state.rotate.goal))
+			( (state.rotate.state == init || state.rotate.state == plus) && (azimuth_pos < state.rotate.goal))
 		)
 			{
-				state.rotate.issued=false;
-				state.rotate.up=true;
+				state.rotate.state=plus;
 				release(button::left);
 				press(button::right);
 			}
 		else if //Should it move left?
 		( 
 			(state.rotation.turn && !state.rotation.clockwise) ||
-			(( state.rotate.issued || state.rotate.down) && (azimuth_pos > state.rotate.goal))
+			(( state.rotate.state == init || state.rotate.state == minus) && (azimuth_pos > state.rotate.goal))
 		)
 			{
-				state.rotate.issued=false;
-				state.rotate.down=true;
+				state.rotate.state=minus;
 				release(button::right);
 				press(button::left);
 			}
@@ -366,9 +364,7 @@ void realmain [[noreturn]] (){
 			{
 				release(button::left);
 				release(button::right);
-				state.rotate.issued=false;
-				state.rotate.up=false;
-				state.rotate.down=false;
+				state.rotate.state=stand;
 				//release left and right
 			}
 			
@@ -376,22 +372,20 @@ void realmain [[noreturn]] (){
 		if 
 		( 
 			(state.elevation.turn && state.elevation.up) ||
-			((state.elevate.issued || state.elevate.up) && (elevation_pos < state.elevate.goal))
+			((state.elevate.state == init || state.elevate.state == plus) && (elevation_pos < state.elevate.goal))
 		)
 			{
-				state.elevate.issued=false;
-				state.elevate.up=true;
+				state.elevate.state=plus;
 				release(button::down);
 				press(button::up);
 			}
 		else if //Should it move down?
 		( 
 			(state.elevation.turn && !state.elevation.up) ||
-			( (state.elevate.issued || state.elevate.down) && (elevation_pos > state.elevate.goal))
+			( (state.elevate.state == init || state.elevate.state == minus) && (elevation_pos > state.elevate.goal))
 		)
 			{
-				state.elevate.issued=false;
-				state.elevate.down=true;
+				state.elevate.state=minus;
 				release(button::up);
 				press(button::down);
 			}
@@ -399,9 +393,7 @@ void realmain [[noreturn]] (){
 			{
 				release(button::up);
 				release(button::down);
-				state.elevate.issued = false;
-				state.elevate.up=false;
-				state.elevate.down=false;
+				state.elevate.state=stand;
 			}
 		
 		if (state.send_unkown) {uartputs("? >"); state.send_unkown=false;}
