@@ -1,27 +1,44 @@
-target = flash
-srcs   = main.c
-defs   = -DF_CPU=8000000L
+#   ________ 
+#  < Hello! >
+#   -------- 
+#         \   ^__^
+#          \  (oo)\_______
+#             (__)\       )\/\
+#                 ||----w |
+#                 ||     ||
+########################################
 
-objs   = $(srcs:.c=.o)
+.DEFAULT_GOAL := rotator.elf
 
-all: $(target).hex
+VERSION = $(shell git rev-parse HEAD)$(shell git diff --quiet || echo -n '-dirty')
 
-.PHONY: clean program fuse
+CC = avr-gcc
+CXX = avr-gcc
+SIZE = avr-size
 
-fuse:
-	avrdude -c usbtiny -p atmega8 -U lfuse:w:0x1c:m -U hfuse:w:0xd9:m
-	
-program: $(target).hex
-	avrdude -c usbtiny -p atmega8 -U flash:w:$(target).hex
+CPPFLAGS = -Wall -Wextra -fstack-usage -mmcu=atmega8 -O3 -g -Wno-array-bounds -Dmacro____commit=\"$(VERSION)\"
+CXXFLAGS = -std=c++20 -fno-exceptions -fno-rtti -fno-use-cxa-atexit -isystem avr-libstdcpp/include -fno-threadsafe-statics -isystem libavrpp/include
 
-$(target).hex: $(target).elf
-	avr-objcopy -j .text -j .data -O ihex $^ $@
-	
-$(target).elf: $(objs)
-	avr-gcc -g -mmcu=atmega8 -o $@ $^
-	
-%.o: %.c
-	avr-gcc -g -Os -mmcu=atmega8 -c $? -o $@ $(defs) --std=gnu99
-	
+OBJECTS = $(addsuffix .o,$(basename $(wildcard *.cpp)))
+
+rotator.elf: $(OBJECTS)
+	avr-gcc -mmcu=atmega8 -o $@ $^
+
+all: rotator.elf
+
 clean:
-	rm *.o *.hex *.elf
+	rm -rf *.o *.elf *.su
+
+size: rotator.elf
+	avr-size --mcu=atmega8 -C $<
+
+refurbish: rotator.elf
+	avrdude -p m8 -c stk500v2 -U flash:w:$<:e -P /dev/ttyUSB0 -B100000 -U lfuse:w:$<:e -U hfuse:w:$<:e -U eeprom:w:$<:e
+
+program: rotator.elf
+	avrdude -p m8 -c stk500v2 -U flash:w:$<:e -P /dev/ttyUSB0 -B100000
+
+reset:
+	avrdude -p m8 -c stk500v2 -P /dev/ttyUSB0 -B100000 
+
+.PHONY: program refurbish size clean reset all

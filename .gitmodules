@@ -1,0 +1,6 @@
+[submodule "avr-libstdcpp"]
+	path = avr-libstdcpp
+	url = https://github.com/modm-io/avr-libstdcpp
+[submodule "libavrpp"]
+	path = libavrpp
+	url = https://github.com/kissadamfkut/libavrpp/
