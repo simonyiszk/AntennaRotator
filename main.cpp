@@ -110,14 +110,14 @@ namespace{
 		static filter::moving_average<16, uint16_t, 0x03ff> fir;
 		int16_t meas = getadch(ADChannel::asimuth) - permanent_config::azimuth::null;
 		fir << (meas > 0 ? meas : 0);
-		return (static_cast<uint32_t>(fir.get())*mechanical_limits::asimuth_max_degree/permanent_config::azimuth::adc_at_max) + permanent_config::azimuth::error;
+		return (static_cast<uint32_t>(fir.get())*mechanical_limits::asimuth_max_degree/(permanent_config::azimuth::adc_at_max-permanent_config::azimuth::null)) + permanent_config::azimuth::error;
 	}
 
 	inline uint16_t getel(){
 		static filter::moving_average<16, uint16_t, 0x03ff> fir;
 		int16_t meas = getadch(ADChannel::elevation) - permanent_config::elevation::null;
 		fir << (meas > 0 ? meas : 0);
-		return (static_cast<uint32_t>(fir.get())*mechanical_limits::elevation_max_degree/permanent_config::elevation::adc_at_max) + permanent_config::elevation::error;
+		return (static_cast<uint32_t>(fir.get())*mechanical_limits::elevation_max_degree/(permanent_config::elevation::adc_at_max-permanent_config::elevation::null)) + permanent_config::elevation::error;
 	}
 	
 	inline void press(button b){
